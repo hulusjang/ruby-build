@@ -2,7 +2,6 @@
 
 RUBY_BUILD_VERSION="20110928"
 
-set -x
 set -E
 exec 3<&2 # preserve original stderr at fd 3
 
