@@ -199,7 +199,8 @@ fix_directory_permissions() {
 use_gcc42_on_lion() {
   if [ "$(uname -s)" = "Darwin" ]; then
     if [ "$(expr "$(sw_vers -productVersion | cut -f 2 -d .)" \>= 7 || true)" -eq 1 ]; then
-      export CC=/usr/bin/gcc-4.2
+      # export CC=/usr/bin/gcc-4.2
+      export CC=/usr/bin/gcc
       CONFIGURE_OPTS="--with-gcc=$CC $CONFIGURE_OPTS"
     fi
   fi
