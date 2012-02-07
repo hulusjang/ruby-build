@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 
-RUBY_BUILD_VERSION="20110928"
+RUBY_BUILD_VERSION="20111230"
 
 set -E
 exec 3<&2 # preserve original stderr at fd 3
 
 resolve_link() {
-  $(type -p greadlink readlink | head -1) $1
+  $(type -p greadlink readlink | head -1) "$1"
 }
 
 abs_dirname() {
@@ -27,11 +27,31 @@ build_failed() {
   { echo
     echo "BUILD FAILED"
     echo
-    echo "Inspect or clean up the working tree at ${TEMP_PATH}"
-    echo "Results logged to ${LOG_PATH}"
-    echo
+
+    if ! rmdir "${TEMP_PATH}" 2>/dev/null; then
+      echo "Inspect or clean up the working tree at ${TEMP_PATH}"
+
+      if file_is_not_empty "$LOG_PATH"; then
+        echo "Results logged to ${LOG_PATH}"
+        echo
+        echo "Last 10 log lines:"
+        tail -n 10 "$LOG_PATH"
+      fi
+    fi
   } >&3
   exit 1
+}
+
+file_is_not_empty() {
+  local filename="$1"
+  local line_count="$(wc -l "$filename" 2>/dev/null || true)"
+
+  if [ -n "$line_count" ]; then
+    words=( $line_count )
+    [ "${words[0]}" -gt 0 ]
+  else
+    return 1
+  fi
 }
 
 install_package() {
@@ -62,6 +82,7 @@ make_package() {
   shift
 
   pushd "$package_name" >&4
+  before_install_package "$package_name"
   build_package "$package_name" $*
   after_install_package "$package_name" $*
   fix_directory_permissions
@@ -108,8 +129,14 @@ build_package() {
 build_package_standard() {
   local package_name="$1"
 
+  if [ -z "${MAKEOPTS+defined}" ]; then
+    MAKE_OPTS="$MAKEOPTS"
+  elif [ -z "${MAKE_OPTS+defined}" ]; then
+    MAKE_OPTS="-j 2"
+  fi
+
   { ./configure --prefix="$PREFIX_PATH" $CONFIGURE_OPTS
-    make -j 2
+    make $MAKE_OPTS
     make install
   } >&4 2>&1
 }
@@ -149,7 +176,7 @@ build_package_ree_installer() {
   # Work around install_useful_libraries crash with --dont-install-useful-gems
   mkdir -p "$PREFIX_PATH/lib/ruby/gems/1.8/gems"
 
-  { ./installer --auto "$PREFIX_PATH" --dont-install-useful-gems $options
+  { ./installer --auto "$PREFIX_PATH" --dont-install-useful-gems $options $CONFIGURE_OPTS
   } >&4 2>&1
 }
 
@@ -159,6 +186,21 @@ build_package_rbx() {
   { ./configure --prefix="$PREFIX_PATH" --gemsdir="$PREFIX_PATH"
     rake install
   } >&4 2>&1
+}
+
+build_package_maglev() {
+  build_package_copy
+
+  { cd "${PREFIX_PATH}"
+    ./install.sh
+    cd "${PREFIX_PATH}/bin"
+    echo "Creating symlink for ruby*"
+    ln -fs maglev-ruby ruby
+    echo "Creating symlink for irb*"
+    ln -fs maglev-irb irb
+  } >&4 2>&1
+  echo
+  echo "Run 'maglev start' to start up the stone before using 'ruby' or 'irb'"
 }
 
 build_package_jruby() {
@@ -181,7 +223,12 @@ remove_windows_files() {
 }
 
 build_package_copy() {
+  mkdir -p "$PREFIX_PATH"
   cp -R . "$PREFIX_PATH"
+}
+
+before_install_package() {
+  local stub=1
 }
 
 after_install_package() {
@@ -196,14 +243,76 @@ fix_directory_permissions() {
   find "$PREFIX_PATH" -type d -exec chmod go-w {} \;
 }
 
-use_gcc42_on_lion() {
-  if [ "$(uname -s)" = "Darwin" ]; then
-    if [ "$(expr "$(sw_vers -productVersion | cut -f 2 -d .)" \>= 7 || true)" -eq 1 ]; then
-      # export CC=/usr/bin/gcc-4.2
-      export CC=/usr/bin/gcc
-      CONFIGURE_OPTS="--with-gcc=$CC $CONFIGURE_OPTS"
-    fi
+require_gcc() {
+  local gcc="$(locate_gcc || true)"
+  if [ -z "$gcc" ]; then
+    { echo
+      echo "ERROR: This package must be compiled with GCC, and we"
+      echo "couldn't find a suitable \`gcc' binary on your system."
+      echo "Please install GCC and try again."
+      echo
+
+      if [ "$(uname -s)" = "Darwin" ]; then
+        echo "As of version 4.2, Xcode is LLVM-only and no longer"
+        echo "includes GCC. You can install GCC with these binary"
+        echo "packages on Mac OS X:"
+        echo
+        echo "https://github.com/kennethreitz/osx-gcc-installer/downloads"
+        echo
+      fi
+    } >&3
+    return 1
   fi
+
+  export CC="$gcc"
+}
+
+locate_gcc() {
+  local gcc gccs
+  IFS=: gccs=($(gccs_in_path))
+
+  verify_gcc "$CC" ||
+  verify_gcc "$(command -v gcc || true)" || {
+    for gcc in "${gccs[@]}"; do
+      verify_gcc "$gcc" && break || true
+    done
+  }
+
+  return 1
+}
+
+gccs_in_path() {
+  local gcc path paths
+  local gccs=()
+  IFS=: paths=($PATH)
+
+  shopt -s nullglob
+  for path in "${paths[@]}"; do
+    for gcc in "$path"/gcc-*; do
+      gccs["${#gccs[@]}"]="$gcc"
+    done
+  done
+  shopt -u nullglob
+
+  printf :%s "${gccs[@]}"
+}
+
+verify_gcc() {
+  local gcc="$1"
+  if [ -z "$gcc" ]; then
+    return 1
+  fi
+
+  local version="$("$gcc" --version || true)"
+  if [ -z "$version" ]; then
+    return 1
+  fi
+
+  if echo "$version" | grep LLVM >/dev/null; then
+    return 1
+  fi
+
+  echo "$gcc"
 }
 
 version() {
