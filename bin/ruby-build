@@ -337,7 +337,26 @@ list_definitions() {
   } | sort
 }
 
+install_ruby_debug19_patch() {
+  local linecache=linecache19-0.5.13.gem
+  local rubydebug=ruby-debug-base19-0.11.26.gem
+  local srcpath=$TEMP_PATH/ruby-$(basename $DEFINITION_PATH)
+  pushd /tmp
 
+  if [ ! -e $linecache ]
+  then
+    wget http://rubyforge.org/frs/download.php/75414/$linecache || build_failed
+  fi
+
+  if [ ! -e $rubydebug ]
+  then
+    wget http://rubyforge.org/frs/download.php/75415/$rubydebug || build_failed
+  fi
+
+  HOME=/tmp $PREFIX_PATH/bin/gem install $linecache || build_failed
+  HOME=/tmp $PREFIX_PATH/bin/gem install $rubydebug -- --with-ruby-include=$srcpath || build_failed
+  popd
+}
 
 unset VERBOSE
 RUBY_BUILD_ROOT="$(abs_dirname "$0")/.."
